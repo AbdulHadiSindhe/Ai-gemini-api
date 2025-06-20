@@ -1,0 +1,816 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI BY A.H.S</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      overscroll-behavior-y: contain; /* Prevents pull-to-refresh on mobile */
+    }
+    /* For a slightly nicer scrollbar, optional */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #e5e7eb; /* Corresponds to Tailwind gray-200 */
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #9ca3af; /* Corresponds to Tailwind gray-400 */
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #6b7280; /* Corresponds to Tailwind gray-500 */
+    }
+    #root {
+      display: flex;
+      flex-direction: column;
+      height: 100vh; /* Full viewport height */
+      max-height: -webkit-fill-available; /* iOS Safari fix for 100vh */
+    }
+    .gradient-text {
+      background-clip: text;
+      -webkit-background-clip: text;
+      color: transparent;
+    }
+    .chat-bubble-user {
+        border-radius: 1.25rem;
+        border-top-right-radius: 0.5rem; /* Less rounded for "tail" */
+    }
+    .chat-bubble-ai {
+        border-radius: 1.25rem;
+        border-top-left-radius: 0.5rem; /* Less rounded for "tail" */
+    }
+    /* Styles for LiveChatView container - will be managed by the component */
+    #live-chat-view-container {
+        width: 100vw;
+        height: 100vh;
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 1000; /* High z-index to overlay */
+        background: #fff; /* Default background */
+    }
+  </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/client": "https://esm.sh/react-dom@^19.1.0/client",
+    "react/jsx-runtime": "https://esm.sh/react@^19.1.0/jsx-runtime",
+    "@google/genai": "https://esm.sh/@google/genai@^1.5.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react/": "https://esm.sh/react@^19.1.0/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-slate-200 text-gray-800 flex flex-col items-center justify-center">
+  <div id="root" class="w-full max-w-md mx-auto shadow-2xl"></div>
+
+  <script type="module">
+    import React, { useState, useCallback, useRef, useEffect } from 'react';
+    import ReactDOM from 'react-dom/client';
+    import { GoogleGenAI } from "@google/genai";
+
+    // --- START of inlined services/geminiService.ts ---
+    const API_KEY = process.env.API_KEY;
+
+    if (!API_KEY) {
+      console.error("Gemini API Key (process.env.API_KEY) is not set. Please configure it in your environment. The application will show an error message in the UI.");
+    }
+
+    let ai = null;
+    if (API_KEY) {
+      try {
+        ai = new GoogleGenAI({ apiKey: API_KEY });
+      } catch (e) {
+        console.error("Failed to initialize GoogleGenAI client:", e.message);
+      }
+    }
+
+    const handleApiError = (error, serviceName) => {
+      console.error(`Error in ${serviceName}:`, error);
+      if (error && typeof error.message === 'string') {
+        if (error.message.toLowerCase().includes("api key not valid")) {
+          return "Error: The API key is invalid or not authorized. Please check your environment configuration.";
+        }
+        if (error.message.toLowerCase().includes("permission denied")) {
+          return "Error: API permission denied. This could be due to an invalid API key or service restrictions.";
+        }
+        if (error.message.toLowerCase().includes("quota") && error.message.toLowerCase().includes("image")) {
+            return "Error: Image generation quota exceeded or resource exhausted. Please try again later.";
+        }
+        if (error.message.toLowerCase().includes("deadline_exceeded") || error.message.toLowerCase().includes("timeout")) {
+            return `Error: The request to the Gemini API timed out during ${serviceName}. Please try again.`;
+        }
+         if (error.message.includes("MODEL_INVALID_ARGUMENT")) {
+            return `Error: Invalid argument for the ${serviceName} model. The prompt might be unsuitable or too long.`;
+        }
+        if (error.message.includes("FETCH_ERROR") || error.message.includes("NETWORK_ERROR")) {
+            return `Error: Network issue while contacting Gemini API for ${serviceName}. Check your connection.`;
+        }
+        return `Error during ${serviceName}: ${error.message}`;
+      }
+      return `An unknown error occurred with the Gemini API during ${serviceName}.`;
+    };
+
+    const generateTextFromGemini = async (prompt) => {
+      if (!API_KEY) {
+        return "Error: API key is not configured. Please contact the administrator.";
+      }
+      if (!ai) {
+        return "Error: Gemini AI client failed to initialize. This is likely due to an invalid or missing API key.";
+      }
+
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-preview-04-17',
+          contents: prompt,
+        });
+        return response.text;
+      } catch (error) {
+        return handleApiError(error, "text generation");
+      }
+    };
+
+    const generateImageFromGemini = async (prompt) => {
+      if (!API_KEY) {
+        return "Error: API key is not configured. Please contact the administrator.";
+      }
+      if (!ai) {
+        return "Error: Gemini AI client failed to initialize. This is likely due to an invalid or missing API key.";
+      }
+
+      try {
+        const apiResponse = await ai.models.generateImages({
+            model: 'imagen-3.0-generate-002',
+            prompt: prompt,
+            config: { numberOfImages: 1, outputMimeType: 'image/jpeg' },
+        });
+
+        console.log("Gemini API 'generateImages' raw response:", apiResponse);
+
+        if (apiResponse.error) { // Top-level error from the API call itself
+            console.error("API error returned in generateImages response payload:", apiResponse.error);
+            return handleApiError(apiResponse.error, "image generation API");
+        }
+
+        if (apiResponse.generatedImages && apiResponse.generatedImages.length > 0) {
+          const firstImage = apiResponse.generatedImages[0];
+
+          if (firstImage.error) { // Error specific to this image generation
+            console.error("Error payload for the first generated image:", firstImage.error);
+            let userMessage = `Error generating image: ${firstImage.error.message || 'The image could not be processed.'}`;
+            if (typeof firstImage.error.message === 'string' && 
+                (firstImage.error.message.toLowerCase().includes('safety') || firstImage.error.message.toLowerCase().includes('policy'))) {
+                userMessage = "Error: The image could not be generated, possibly due to safety policies. Please adjust your prompt and try again.";
+            }
+            return userMessage;
+          }
+
+          if (firstImage.image?.imageBytes) { // Successfully got image bytes
+            const base64ImageBytes = firstImage.image.imageBytes;
+            return `data:image/jpeg;base64,${base64ImageBytes}`;
+          }
+          
+          // If no imageBytes, and no explicit error object, check finishReason
+          if (firstImage.finishReason && firstImage.finishReason !== "SUCCESS") {
+              console.warn(`Image generation finished with reason: ${firstImage.finishReason}, but no imageBytes and no explicit error object.`);
+              if (firstImage.finishReason === "SAFETY") {
+                  return "Error: The image could not be generated due to safety policies. Please adjust your prompt.";
+              } else if (firstImage.finishReason === "RECITATION") {
+                   return "Error: The image could not be generated due to recitation policies. The output may be too similar to copyrighted material.";
+              } else if (firstImage.finishReason === "OTHER") {
+                  return "Error: Image generation failed for an unspecified reason (OTHER). Please try a different prompt.";
+              }
+              // Generic message for other non-SUCCESS finishReasons
+              return `Error: Image generation failed (reason: ${firstImage.finishReason}). No image data was returned.`;
+          }
+        }
+        
+        console.error("No image data found in API response, and no specific error messages in payload. See raw response logged above for details.");
+        return "Error: No image data was returned by the API. The prompt might be unsuitable, or an unexpected API issue occurred. Check console for details.";
+
+      } catch (e) { 
+         console.error("Exception during call to generateImageFromGemini:", e);
+         return handleApiError(e, "image generation"); 
+      }
+    };
+    // --- END of inlined services/geminiService.ts ---
+
+
+    // --- START of inlined ICON components ---
+    const SendIcon = ({className}) => (
+      React.createElement('svg', {className: className || "w-6 h-6", xmlns:"http://www.w3.org/2000/svg", viewBox:"0 0 24 24", fill:"currentColor"},
+        React.createElement('path', {d:"M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z"})
+      )
+    );
+
+    const MicrophoneIcon = ({ className, isRecording }) => (
+      React.createElement('svg', { 
+        className: `${className || "w-6 h-6"} ${isRecording ? 'text-red-500 animate-pulse' : 'text-gray-500 hover:text-purple-600'}`, 
+        xmlns: "http://www.w3.org/2000/svg", 
+        viewBox: "0 0 24 24", 
+        fill: "currentColor" 
+      },
+        React.createElement('path', { d: "M12 15a3 3 0 003-3V6a3 3 0 00-6 0v6a3 3 0 003 3z" }),
+        React.createElement('path', { d: "M17.318 11.95A6.974 6.974 0 0119 12a1 1 0 01-2 0 5.002 5.002 0 00-4.053-4.908.5.5 0 01.906-.416A4.002 4.002 0 0117 12a.999.999 0 01-.682.95z" }),
+        React.createElement('path', { d: "M6.682 11.95A.999.999 0 016 12a5.002 5.002 0 00-4.053-4.908.5.5 0 01.906-.416A4.002 4.002 0 015 12a6.974 6.974 0 012-11.05.5.5 0 01.906.416A6.974 6.974 0 016.682 11.95z" }),
+        React.createElement('path', { d: "M12 19a4.978 4.978 0 01-3.535-1.465.5.5 0 01.707-.707A3.978 3.978 0 0012 18a3.978 3.978 0 002.828-1.172.5.5 0 11.707.707A4.978 4.978 0 0112 19z" }),
+         React.createElement('path', { d: "M10 21.5a.5.5 0 01.5-.5h3a.5.5 0 010 1h-3a.5.5 0 01-.5-.5z" })
+      )
+    );
+    
+    const NewSpeakIcon = ({ className }) => ( 
+      React.createElement('svg', { className: className || "w-5 h-5", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor" },
+        React.createElement('path', { d: "M5.25 7.5A2.25 2.25 0 003 9.75v.5A2.25 2.25 0 005.25 12.5h.75a.75.75 0 000-1.5H5.25a.75.75 0 01-.75-.75V9.75c0-.414.336-.75.75-.75h.75a.75.75 0 000-1.5H5.25z"}),
+        React.createElement('path', { fillRule:"evenodd", d: "M10 3.25a.75.75 0 00-.75.75v12a.75.75 0 001.5 0V4a.75.75 0 00-.75-.75zM6.592 5.518a.75.75 0 00-1.01.27L3.938 8.018a.75.75 0 000 .964l1.644 2.23a.75.75 0 001.01.27L8.06 10.09a.75.75 0 000-.964L6.592 5.518zM15.062 8.018L13.42 5.788a.75.75 0 10-1.28.764L13.938 9.07l-1.8 2.518a.75.75 0 101.28.764L15.062 9.83a.75.75 0 000-.964z", clipRule:"evenodd"})
+      )
+    );
+
+    const NewCopyIcon = ({ className }) => ( 
+      React.createElement('svg', { className: className || "w-5 h-5", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor" },
+        React.createElement('path', { d: "M5.25 3.75a.75.75 0 00-.75.75v11.5a.75.75 0 00.75.75h9.5a.75.75 0 00.75-.75V8.566a2.251 2.251 0 00-.66-1.586l-2.434-2.434A2.251 2.251 0 0010.816 3.75H5.25zM12 5.25V7.5h2.25L12 5.25z"}),
+        React.createElement('path', { d:"M5.25 3A2.25 2.25 0 003 5.25v11.5A2.25 2.25 0 005.25 19h9.5A2.25 2.25 0 0017 16.75V8.566a3.75 3.75 0 00-1.097-2.652L13.47 3.48A3.75 3.75 0 0010.817 3H5.25zM11.25 5.25V7.5c0 .414.336.75.75.75h2.25L11.25 5.25z"})
+      )
+    );
+
+    const HeartIconPath = "M9.653 16.915l-.005-.003-.019-.01a20.759 20.759 0 01-1.162-.682 22.045 22.045 0 01-2.582-1.9-22.044 22.044 0 01-3.056-3.056 20.758 20.758 0 01-.682-1.162l-.01-.019-.003-.005a.752.752 0 01-.003-.005l-.002-.004-.002-.003a.243.243 0 010-.05c0-.01.002-.02.003-.03l.002-.004.002-.004a.244.244 0 01.05-.002l.004-.002.003-.002a.752.752 0 01.005-.003l.019-.01.005-.003c.38-.261.762-.52 1.162-.683.996-.407 2.073-.62 3.18-.62s2.183.213 3.18.62c.4.162.782.422 1.162.682l.005.003.019.01.003.005a.752.752 0 01.003.005l.002.004.002.003c0 .01.002.02.003.03l-.002.004-.002.004a.243.243 0 01-.05.002l-.004.002-.003.002a.752.752 0 01-.005.003l-.019-.01-.005-.003a20.759 20.759 0 01-1.162.682 22.045 22.045 0 01-2.582 1.9 22.044 22.044 0 01-3.056 3.056 20.758 20.758 0 01-.682 1.162l-.01.019-.003.005a.752.752 0 01-.003-.005l-.002.004-.002.003a.244.244 0 010 .05c0 .01-.002.02-.003.03l-.002.004-.002.004a.243.243 0 01-.05.002l-.004.002-.003.002a.752.752 0 01-.005.003l-.019.01-.005-.003z";
+    
+    const NewRegenerateIcon = ({ className }) => ( 
+        React.createElement('svg', { className: className || "w-5 h-5", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor" },
+            React.createElement('path', { fillRule: "evenodd", d: "M15.323 4.677a.75.75 0 00-1.06-1.06l-1.061 1.06A6.251 6.251 0 005.41 13.46l-1.06 1.06a.75.75 0 101.06 1.06l1.06-1.06a6.251 6.251 0 009.852-7.788L16.383 5.738a.75.75 0 00-1.06-1.061l-1.06 1.06zM6.732 7.484a.75.75 0 001.046.043A3.24 3.24 0 0110 6.999a3.24 3.24 0 012.218 1.033.75.75 0 101.066-1.05A4.74 4.74 0 0010 5.5a4.74 4.74 0 00-3.535 1.52.75.75 0 00.267 1.007l.002-.001.003-.002z", clipRule: "evenodd" }),
+            React.createElement('path', { d: HeartIconPath, transform:"scale(0.35) translate(14, 11)" }) 
+        )
+    );
+
+    const ThumbsUpIcon = ({ className }) => (
+      React.createElement('svg', { className: className || "w-5 h-5", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor" },
+        React.createElement('path', { d: "M1 8.25a1.25 1.25 0 112.5 0v7.5a1.25 1.25 0 11-2.5 0v-7.5zM18.868 9.523c.027-.166.032-.335.032-.503 0-.968-.38-1.854-1.03-2.508C17.187 5.828 16.3 5.5 15.31 5.5H12V3.25a1.25 1.25 0 00-1.25-1.25h-.008c-.496 0-.97.237-1.272.639L5.808 7.5H3.5a1.25 1.25 0 00-1.25 1.25v7.5A1.25 1.25 0 003.5 17.5h11.81c.99 0 1.871-.69 2.113-1.649l1.012-4.048c.11-.439.102-.9.032-1.28z" })
+      )
+    );
+
+    const ThumbsDownIcon = ({ className }) => (
+      React.createElement('svg', { className: className || "w-5 h-5", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 20 20", fill: "currentColor" },
+        React.createElement('path', { d: "M1 11.75a1.25 1.25 0 102.5 0V4.25a1.25 1.25 0 10-2.5 0v7.5zM18.868 10.477c.027.166.032.335.032.503 0 .968-.38 1.854-1.03 2.508-.682.686-1.569 1.017-2.559 1.017H3.5V16.75a1.25 1.25 0 001.25 1.25h.008c.496 0 .97-.237 1.272-.639l3.662-4.882H16.5a1.25 1.25 0 001.25-1.25V4.25a1.25 1.25 0 00-1.25-1.25H4.69c-.99 0-1.871.69-2.113 1.649l-1.012 4.048c-.11.439-.102.9-.032 1.28z" })
+      )
+    );
+
+    const LiveChatIcon = ({ className }) => ( 
+      React.createElement('svg', { className: className || "w-6 h-6", xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "currentColor" },
+        React.createElement('path', { fillRule:"evenodd", d:"M4.804 21.644A6.707 6.707 0 014 21.012V21a3 3 0 013-3h11.196a.75.75 0 00.729-.983 6.707 6.707 0 011.603-3.052.75.75 0 00-.376-1.054l-1.353-.812A13.453 13.453 0 0012 5.25c-4.781 0-8.995 2.573-11.218 6.327a.75.75 0 00.287 1.028l1.928 1.071A3.729 3.729 0 004 15.75H4c0 1.24.22 2.42.623 3.518.15.405.023.864-.32 1.156l-.92.768a.75.75 0 00.422 1.334l2.428-.485a3.74 3.74 0 011.83.477c.18.06.367.098.558.118a6.735 6.735 0 014.187 0c.19-.02.377-.059.558-.118a3.74 3.74 0 011.83-.477l2.428.486a.75.75 0 00.422-1.334l-.92-.768a.75.75 0 01-.32-1.156A10.456 10.456 0 0017.625 18H21a.75.75 0 000-1.5h-2.176a8.956 8.956 0 01-1.328-3.978A11.953 11.953 0 0112 6.75a11.953 11.953 0 01-5.12 2.772 8.956 8.956 0 01-1.327 3.978H2.25a.75.75 0 000 1.5H4c.247 0 .488.02.723.058a8.92 8.92 0 013.486.82 8.92 8.92 0 013.486-.82A8.92 8.92 0 0115 18.058a8.92 8.92 0 013.486.82 8.92 8.92 0 013.486-.82.757.757 0 00.723-.058H21a3 3 0 013 3v.012a6.707 6.707 0 01-.804.632.75.75 0 00-.399 1.255l.066.099a.75.75 0 001.168-.146 8.207 8.207 0 00.323-4.043 8.18 8.18 0 00-.28-2.224.75.75 0 00-1.042-.519l-1.353.812a.75.75 0 00-.376 1.054A6.707 6.707 0 0119.596 18H18a3 3 0 01-3-3h-2.25a.75.75 0 00-.75.75 3 3 0 01-3 3 .75.75 0 00-.75-.75H6a3 3 0 01-3 3H1.5a.75.75 0 00-.75.75c0 .098.012.195.035.29a8.18 8.18 0 002.032 4.148.75.75 0 001.168.146l.066-.099a.75.75 0 00-.4-1.255zM12 9a1.5 1.5 0 100-3 1.5 1.5 0 000 3z", clipRule:"evenodd"})
+      )
+    );
+    // --- END of inlined ICON components ---
+
+    // --- START of inlined components/LoadingSpinner.tsx ---
+    const LoadingSpinner = () => (
+      React.createElement('svg', { 
+        className: "animate-spin h-5 w-5 text-white", 
+        xmlns: "http://www.w3.org/2000/svg", 
+        fill: "none", 
+        viewBox: "0 0 24 24"
+      }, 
+        React.createElement('circle', { 
+          className: "opacity-25", 
+          cx: "12", 
+          cy: "12", 
+          r: "10", 
+          stroke: "currentColor", 
+          strokeWidth: "4"
+        }),
+        React.createElement('path', { 
+          className: "opacity-75", 
+          fill: "currentColor", 
+          d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+        })
+      )
+    );
+    // --- END of inlined components/LoadingSpinner.tsx ---
+
+    // --- START of inlined components/TitleBar.tsx ---
+    const TitleBar = () => {
+      return (
+        React.createElement('div', { className: "p-4 text-center bg-gradient-to-r from-purple-600 via-pink-500 to-red-500 shadow-md" },
+          React.createElement('h1', { className: "text-xl md:text-2xl font-bold text-white tracking-wider" }, "AI BY A . H . S")
+        )
+      );
+    };
+    // --- END of inlined components/TitleBar.tsx ---
+
+    // --- START of inlined components/ChatMessage.tsx ---
+    const ChatMessage = ({ message }) => {
+      const isUser = message.sender === 'user';
+      const isAi = message.sender === 'ai';
+      const isError = message.sender === 'error';
+
+      const baseBubbleClasses = 'p-3 max-w-[85%] break-words shadow-md text-sm md:text-base';
+      const userBubbleClasses = 'bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 text-white chat-bubble-user';
+      const aiBubbleClasses = 'bg-slate-700 text-white chat-bubble-ai';
+      const errorBubbleClasses = 'bg-red-600 text-white chat-bubble-ai';
+
+      const bubbleClasses = isUser ? `${baseBubbleClasses} ${userBubbleClasses}` :
+                            isAi || message.content === 'Thinking...' ? `${baseBubbleClasses} ${aiBubbleClasses}` :
+                            `${baseBubbleClasses} ${errorBubbleClasses}`;
+      
+      const ActionButtons = () => (
+        React.createElement('div', { className: "flex space-x-2 mt-2 pt-2 border-t border-slate-600" },
+          React.createElement('button', { className: "p-1 hover:bg-slate-500 rounded-full", title:"Speak", "aria-label": "Speak message content" }, React.createElement(NewSpeakIcon, { className: "w-4 h-4 text-slate-300" })),
+          React.createElement('button', { className: "p-1 hover:bg-slate-500 rounded-full", title:"Copy", "aria-label": "Copy message content" }, React.createElement(NewCopyIcon, { className: "w-4 h-4 text-slate-300" })),
+          React.createElement('button', { className: "p-1 hover:bg-slate-500 rounded-full", title:"Regenerate", "aria-label": "Regenerate response" }, React.createElement(NewRegenerateIcon, { className: "w-4 h-4 text-slate-300" })),
+          React.createElement('button', { className: "p-1 hover:bg-slate-500 rounded-full", title:"Like", "aria-label": "Like this response" }, React.createElement(ThumbsUpIcon, { className: "w-4 h-4 text-slate-300" })),
+          React.createElement('button', { className: "p-1 hover:bg-slate-500 rounded-full", title:"Dislike", "aria-label": "Dislike this response" }, React.createElement(ThumbsDownIcon, { className: "w-4 h-4 text-slate-300" }))
+        )
+      );
+
+      return (
+        React.createElement('div', { className: `flex flex-col ${isUser ? 'items-end' : 'items-start'} my-1` },
+          React.createElement('div', { className: bubbleClasses, role: "log", "aria-live": isAi ? "polite" : "off" },
+            message.type === 'text' && (
+              React.createElement('p', { className: "whitespace-pre-wrap" }, message.content)
+            ),
+            message.type === 'image' && (
+              React.createElement('img', { 
+                src: message.content, 
+                alt: "Generated by AI", 
+                className: "max-w-full h-auto rounded-lg shadow-lg object-contain max-h-64 md:max-h-80"
+              })
+            ),
+            (isAi && message.content !== 'Thinking...' && !isError) && React.createElement(ActionButtons, null)
+          )
+        )
+      );
+    };
+    // --- END of inlined components/ChatMessage.tsx ---
+
+    // --- START of inlined components/MessageList.tsx ---
+    const MessageList = ({ messages }) => {
+      const messagesEndRef = useRef(null);
+
+      const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      };
+
+      useEffect(() => {
+        scrollToBottom();
+      }, [messages]);
+
+      return (
+        React.createElement('div', { className: "flex-grow p-3 md:p-4 space-y-3 overflow-y-auto bg-slate-50" },
+          messages.map((msg) => (
+            React.createElement(ChatMessage, { key: msg.id, message: msg })
+          )),
+          React.createElement('div', { ref: messagesEndRef })
+        )
+      );
+    };
+    // --- END of inlined components/MessageList.tsx ---
+
+    // --- START of inlined components/PromptInput.tsx ---
+    const PromptInput = ({ prompt, onPromptChange, onSubmit, isLoading, isRecording, onToggleRecording }) => {
+      const handleKeyDown = (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          if (!isLoading && prompt.trim()) {
+            onSubmit();
+          }
+        }
+      };
+
+      return (
+        React.createElement('div', { className: "p-3 md:p-4 bg-slate-100 border-t border-slate-300" },
+          React.createElement('div', { className: "flex items-center space-x-2 bg-white p-2 rounded-full shadow" },
+            React.createElement('button', { 
+               className: "p-2 focus:outline-none rounded-full",
+               onClick: onToggleRecording,
+               "aria-label": isRecording ? "Stop recording" : "Start recording",
+               disabled: isLoading
+             }, 
+               React.createElement(MicrophoneIcon, { className: "w-6 h-6", isRecording: isRecording })
+            ),
+            React.createElement('input', {
+              type: "text",
+              id: "prompt-input",
+              value: prompt,
+              onChange: (e) => onPromptChange(e.target.value),
+              onKeyDown: handleKeyDown,
+              placeholder: "Type your message",
+              className: "flex-grow p-2 bg-transparent focus:outline-none text-gray-700 placeholder-gray-400 text-sm md:text-base",
+              disabled: isLoading || isRecording,
+              "aria-label": "Chat input"
+            }),
+            React.createElement('button', {
+              onClick: onSubmit,
+              disabled: isLoading || !prompt.trim() || isRecording,
+              className: "p-2.5 bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 hover:opacity-90 text-white font-semibold rounded-full shadow-md focus:outline-none focus:ring-2 focus:ring-purple-400 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150 ease-in-out flex items-center justify-center",
+              "aria-label": "Send message",
+              "aria-live": "polite"
+            },
+              isLoading ? React.createElement(LoadingSpinner, null) : React.createElement(SendIcon, { className: "w-5 h-5" })
+            )
+          ),
+          React.createElement('p', {className: "text-center text-xs text-gray-500 mt-2"}, "A . H . S AI can make mistakes. So double check it.")
+        )
+      );
+    };
+    // --- END of inlined components/PromptInput.tsx ---
+
+    // --- START of inlined LiveChatView.tsx ---
+    const LiveChatView = ({ onClose }) => {
+      const liveChatContainerRef = useRef(null);
+      const scriptRef = useRef(null);
+
+      useEffect(() => {
+        if (liveChatContainerRef.current) {
+          const liveChatHTML = `
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+            <style>
+              /* Scoped styles for live chat view */
+              #live-chat-view-internal-body { margin: 0; background: #fff; font-family: Arial, sans-serif; height: 100%; overflow: hidden; position: relative; }
+              .live-chat-reload-btn { position: absolute; top: 20px; right: 20px; width: 36px; height: 36px; background: #f7f7f7; border-radius: 50%; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.08); cursor: pointer; border: none; z-index: 20; transition: background 0.2s, transform 0.2s; }
+              .live-chat-reload-btn:hover { background: #ececec; transform: scale(1.08); }
+              .live-chat-reload-btn i { font-size: 18px; color: #444; }
+              .live-chat-circle { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 200px; height: 200px; border-radius: 50%; background: linear-gradient(135deg, #66ccff 0%, #ff77cc 100%); animation: liveChatPulseAnimation 3s ease-in-out infinite; box-shadow: 0 4px 32px #b0d8ff33; z-index: 2; }
+              .live-chat-circle.listening { box-shadow: 0 0 0 12px #ff77cc33, 0 4px 32px #b0d8ff66; animation: liveChatPulseAnimation 1.2s infinite; }
+              @keyframes liveChatPulseAnimation { 0%,100% { transform: translate(-50%, -50%) scale(1); opacity: 1; } 50% { transform: translate(-50%, -50%) scale(1.05); opacity: 0.97; } }
+              .live-chat-bottom-buttons { position: absolute; bottom: 40px; width: 100%; display: flex; justify-content: space-between; padding: 0 40px; z-index: 10; box-sizing: border-box; }
+              .live-chat-btn { width: 60px; height: 60px; background: #f7f7f7; border-radius: 50%; display: flex; justify-content: center; align-items: center; box-shadow: 0 4px 10px rgba(0,0,0,0.07); cursor: pointer; transition: background 0.3s, transform 0.3s; border: none; outline: none; }
+              .live-chat-btn:hover { background: #ececec; transform: scale(1.07); }
+              .live-chat-btn i { font-size: 24px; color: #000; transition: color 0.2s; }
+              .live-chat-btn.mic.active { background: #2196f3; }
+              .live-chat-btn.mic.active i { color: #fff; }
+              .live-chat-sr-only { position: absolute; left: -9999px; }
+              @media (max-width: 400px) {
+                .live-chat-circle { width: 130px; height: 130px; }
+                .live-chat-bottom-buttons { padding: 0 10px; bottom: 18px; }
+                .live-chat-btn { width: 44px; height: 44px; }
+                .live-chat-btn i { font-size: 20px; }
+                .live-chat-reload-btn { width: 28px; height: 28px; top: 10px; right: 10px; }
+                .live-chat-reload-btn i { font-size: 14px; }
+              }
+            </style>
+            <div id="live-chat-view-internal-body">
+              <button class="live-chat-reload-btn" id="liveChatReloadBtn" title="Restart conversation"><i class="fas fa-rotate-right"></i></button>
+              <div class="live-chat-circle" id="liveChatCloudCircle"></div>
+              <div class="live-chat-bottom-buttons">
+                <button class="live-chat-btn mic" id="liveChatMicBtn" title="Speak"><i class="fas fa-microphone"></i></button>
+                <button class="live-chat-btn" id="liveChatCloseBtn" title="Close"><i class="fas fa-times"></i></button>
+              </div>
+              <span class="live-chat-sr-only" id="liveChatLiveText"></span>
+            </div>
+          `;
+          liveChatContainerRef.current.innerHTML = liveChatHTML;
+
+          const currentApiKey = process.env.API_KEY;
+          if (!currentApiKey) {
+            console.error("Live Chat: API_KEY is not set in process.env");
+            const internalBody = liveChatContainerRef.current.querySelector("#live-chat-view-internal-body");
+            if(internalBody) internalBody.innerHTML = "<p style='color:red; text-align:center; padding-top: 50px;'>Error: API Key not configured for Live Chat.</p>";
+            return;
+          }
+
+          const liveChatScriptContent = `
+            (function() { // IIFE
+              const LIVE_CHAT_GEMINI_API_KEY = "${currentApiKey}";
+              const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:generateContent?key=" + LIVE_CHAT_GEMINI_API_KEY;
+
+              const micBtn = document.getElementById('liveChatMicBtn');
+              const closeBtn = document.getElementById('liveChatCloseBtn');
+              const cloudCircle = document.getElementById('liveChatCloudCircle');
+              const liveText = document.getElementById('liveChatLiveText');
+              const reloadBtn = document.getElementById('liveChatReloadBtn');
+
+              let recognizing = false;
+              let recognition;
+              let ttsEnabled = true;
+              let autoListen = true;
+              let speaking = false;
+              let recognitionStartAttempted = false; // To prevent rapid re-attempts if start itself fails
+
+              function setMicActive(active) { micBtn.classList.toggle('active', active); cloudCircle.classList.toggle('listening', active); }
+
+              function startRecognitionSafely() {
+                if (recognition && !recognizing && !recognitionStartAttempted) {
+                    try {
+                        recognition.start();
+                        // onstart will set recognizing = true
+                    } catch (e) {
+                        console.error("LiveChat: Error executing recognition.start():", e.name, e.message);
+                        liveText.textContent = "Mic start error: " + (e.message || e.name);
+                        setMicActive(false); 
+                        recognizing = false; // Ensure state is correct
+
+                        recognitionStartAttempted = true;
+                        setTimeout(() => { recognitionStartAttempted = false; }, 1000); // Allow retries after a delay
+                    }
+                }
+              }
+
+              if ('webkitSpeechRecognition' in window) {
+                recognition = new webkitSpeechRecognition();
+                recognition.lang = 'en-US';
+                recognition.interimResults = false;
+                recognition.maxAlternatives = 1;
+                recognition.onstart = () => { recognizing = true; setMicActive(true); liveText.textContent = "Listening…"; recognitionStartAttempted = false; };
+                recognition.onend = () => {
+                  recognizing = false; setMicActive(false); 
+                  if (liveText.textContent === "Listening…") liveText.textContent = ""; // Clear only if it was "Listening..."
+                };
+                recognition.onresult = (event) => { const transcript = event.results[0][0].transcript; liveText.textContent = "You said: " + transcript; getGeminiResponse(transcript); };
+                recognition.onerror = (event) => { 
+                  console.error("Live Chat SR Error:", event.error, event.message); 
+                  liveText.textContent = "Mic error: " + event.error; 
+                  recognizing = false; 
+                  setMicActive(false);
+                };
+              } else { console.warn("Speech recognition not supported."); liveText.textContent="Mic not supported"; }
+
+              micBtn.onclick = () => {
+                if (!recognition) return;
+                if (window.speechSynthesis && window.speechSynthesis.speaking) { window.speechSynthesis.cancel(); speaking = false; }
+                if (!recognizing) {
+                    startRecognitionSafely();
+                } else {
+                    recognition.stop();
+                }
+              };
+              
+              window.performLiveChatCleanup = () => {
+                autoListen = false; 
+                if (recognition && recognizing) { try { recognition.stop(); } catch(e){ console.warn("Error stopping recognition on cleanup:", e);}}
+                if (window.speechSynthesis && speaking) { window.speechSynthesis.cancel(); speaking = false; }
+                recognition = null; // Release recognition object
+              };
+
+              closeBtn.onclick = () => {
+                if (window.liveChatGlobalOnClose) window.liveChatGlobalOnClose();
+              };
+
+              reloadBtn.onclick = () => {
+                autoListen = true; // Re-enable autoListen if it was disabled
+                if (recognition && recognizing) { try { recognition.stop(); } catch(e){ console.warn("Error stopping recognition on reload:", e);}}
+                if (window.speechSynthesis && speaking) { window.speechSynthesis.cancel(); speaking = false; }
+                liveText.textContent = "Restarted. Please speak!";
+                setTimeout(() => startRecognitionSafely(), 400); 
+              };
+
+              async function getGeminiResponse(question) {
+                liveText.textContent = "Thinking…";
+                try {
+                  const res = await fetch(GEMINI_API_URL, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: question }] }] })
+                  });
+                  if (!res.ok) { const errData = await res.json(); throw new Error(errData.error?.message || \`API Error: \${res.status}\`); }
+                  const data = await res.json();
+                  let answer = "Sorry, I couldn't understand.";
+                  if (data.candidates && data.candidates.length > 0) {
+                    const cand = data.candidates[0];
+                    if (cand.finishReason === "SAFETY" || cand.finishReason === "OTHER") {
+                        answer = "Response not available due to safety or other policy reasons.";
+                    } else if (cand.content && cand.content.parts && cand.content.parts.length > 0) {
+                        answer = cand.content.parts[0].text.trim();
+                    }
+                  } else if (data.promptFeedback && data.promptFeedback.blockReason) {
+                    answer = "Prompt blocked: " + data.promptFeedback.blockReason;
+                  }
+                  liveText.textContent = answer;
+                  if (ttsEnabled) {
+                    speakText(answer, () => { if (autoListen && recognition) setTimeout(() => startRecognitionSafely(), 400); });
+                  } else if (autoListen && recognition) {
+                    setTimeout(() => startRecognitionSafely(), 400);
+                  }
+                } catch (e) { 
+                  console.error("Live Chat API Error:", e); 
+                  liveText.textContent = "Error: " + e.message; 
+                  if (autoListen && recognition) setTimeout(() => startRecognitionSafely(), 800); 
+                }
+              }
+
+              function speakText(text, onEndCallback) {
+                if (!('speechSynthesis' in window)) { if (onEndCallback) onEndCallback(); return; }
+                if(window.speechSynthesis.speaking) window.speechSynthesis.cancel();
+                speaking = true;
+                const utter = new SpeechSynthesisUtterance(text);
+                utter.lang = 'en-US';
+                utter.onend = () => { speaking = false; if (onEndCallback) onEndCallback(); };
+                utter.onerror = (e) => { console.error("TTS Error:", e.error); speaking = false; if (onEndCallback) onEndCallback(); };
+                window.speechSynthesis.speak(utter);
+              }
+              if (autoListen && recognition) setTimeout(() => startRecognitionSafely(), 500);
+            })(); // End IIFE
+          `;
+          
+          const scriptElement = document.createElement('script');
+          scriptElement.type = 'text/javascript';
+          scriptElement.text = liveChatScriptContent;
+          scriptRef.current = scriptElement;
+          
+          window.liveChatGlobalOnClose = () => {
+            if (window.performLiveChatCleanup) window.performLiveChatCleanup();
+            onClose();
+          };
+          document.body.appendChild(scriptElement);
+
+          return () => {
+            if (window.performLiveChatCleanup) {
+              window.performLiveChatCleanup();
+              delete window.performLiveChatCleanup;
+            }
+            if (window.liveChatGlobalOnClose) delete window.liveChatGlobalOnClose;
+            if (scriptRef.current && scriptRef.current.parentNode === document.body) {
+              document.body.removeChild(scriptRef.current);
+            }
+            scriptRef.current = null;
+            if (liveChatContainerRef.current) liveChatContainerRef.current.innerHTML = '';
+          };
+        }
+      }, [onClose]);
+
+      return React.createElement('div', { ref: liveChatContainerRef, id: "live-chat-view-container" });
+    };
+    // --- END of inlined LiveChatView.tsx ---
+
+    // --- START of inlined App.tsx ---
+    const App = () => {
+      const [messages, setMessages] = useState([]);
+      const [prompt, setPrompt] = useState('');
+      const [isLoading, setIsLoading] = useState(false);
+      const [isRecording, setIsRecording] = useState(false);
+      const [showLiveChatView, setShowLiveChatView] = useState(false);
+      const speechRecognitionRef = useRef(null);
+
+      useEffect(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          speechRecognitionRef.current = new SpeechRecognition();
+          const recognition = speechRecognitionRef.current;
+          recognition.continuous = false;
+          recognition.lang = 'en-US';
+          recognition.interimResults = false;
+
+          recognition.onresult = (event) => {
+            const spokenText = event.results[0][0].transcript;
+            setPrompt(spokenText);
+          };
+          recognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error, event.message);
+            addMessage('error', 'text', `Mic error: ${event.error}. Please try again.`);
+            setIsRecording(false); // Ensure UI updates
+          };
+          recognition.onstart = () => { /* setIsRecording is handled by toggle */ };
+          recognition.onend = () => {
+             setIsRecording(false);
+          };
+        } else {
+          console.warn('Speech Recognition API not supported in this browser.');
+          addMessage('error', 'text', 'Speech recognition is not supported in this browser.');
+        }
+        return () => { 
+            if (speechRecognitionRef.current) {
+                speechRecognitionRef.current.onresult = null;
+                speechRecognitionRef.current.onerror = null;
+                speechRecognitionRef.current.onstart = null;
+                speechRecognitionRef.current.onend = null;
+                if (isRecording) { // Check current app's recording state
+                   try { speechRecognitionRef.current.stop(); } catch(e) { console.warn("Error stopping main app recognition on unmount:", e);}
+                }
+                speechRecognitionRef.current = null;
+            }
+        };
+      }, []); 
+
+
+      const addMessage = (sender, type, content) => {
+        setMessages(prev => [...prev, { 
+            id: Date.now().toString() + Math.random().toString(), 
+            sender, type, content, timestamp: Date.now() 
+        }]);
+      };
+      
+      const handleToggleRecording = () => {
+        if (!speechRecognitionRef.current) {
+            addMessage('error', 'text', 'Speech recognition is not available or initialized.');
+            return;
+        }
+        if (isRecording) {
+            try { speechRecognitionRef.current.stop(); } catch(e){ console.warn("Error stopping main app recognition:", e); setIsRecording(false); /* Force UI update if stop fails */ }
+            // setIsRecording(false); // onend will handle
+        } else {
+            try {
+                setPrompt(''); 
+                setIsRecording(true); 
+                speechRecognitionRef.current.start();
+            } catch(e) {
+                console.error("Error starting speech recognition:", e);
+                addMessage('error', 'text', `Could not start mic: ${e.message || e.name}. Ensure permissions are granted.`);
+                setIsRecording(false); 
+            }
+        }
+      };
+
+      const handleOpenLiveChat = () => {
+        if (isRecording && speechRecognitionRef.current) {
+          try { speechRecognitionRef.current.stop(); } catch(e) { console.warn("Error stopping main app recognition for Live Chat:", e); }
+          // setIsRecording(false); // onend will handle this
+        }
+        setShowLiveChatView(true);
+      };
+
+      const handleCloseLiveChat = () => {
+        setShowLiveChatView(false);
+      };
+
+      const detectIntent = (text) => {
+        const lowerCasePrompt = text.toLowerCase();
+        const imageKeywords = ["image of", "picture of", "photo of", "draw", "sketch", "generate image", "create image", "visualize", "illustrate", "show me a pic of", "render an image", "design a logo"];
+        if (imageKeywords.some(keyword => lowerCasePrompt.includes(keyword))) return 'image';
+        if (/\b(logo|icon|diagram|chart|graph|banner|poster)\b/i.test(lowerCasePrompt)) return 'image';
+        if (lowerCasePrompt.startsWith("generate an image") || lowerCasePrompt.startsWith("create a picture")) return 'image';
+        return 'text';
+      };
+
+      const handleSubmit = useCallback(async () => {
+        const trimmedPrompt = prompt.trim();
+        if (!trimmedPrompt || isLoading || isRecording) return;
+
+        addMessage('user', 'text', trimmedPrompt);
+        setIsLoading(true);
+        setPrompt(''); 
+
+        const thinkingMessageId = Date.now().toString() + "-thinking";
+        setMessages(prev => [...prev, { id: thinkingMessageId, sender: 'ai', type: 'text', content: 'Thinking...', timestamp: Date.now() }]);
+
+        try {
+          const intent = detectIntent(trimmedPrompt);
+          let result;
+          if (intent === 'text') {
+            result = await generateTextFromGemini(trimmedPrompt);
+            if (result.startsWith("Error:")) addMessage('error', 'text', result);
+            else addMessage('ai', 'text', result);
+          } else { 
+            result = await generateImageFromGemini(trimmedPrompt);
+            if (result.startsWith("Error:")) addMessage('error', 'text', result);
+            else addMessage('ai', 'image', result); 
+          }
+        } catch (apiError) {
+          console.error("API Error in App:", apiError);
+          addMessage('error', 'text', apiError.message || "An unexpected error occurred.");
+        } finally {
+          setMessages(prev => prev.filter(msg => msg.id !== thinkingMessageId));
+          setIsLoading(false);
+        }
+      }, [prompt, isLoading, isRecording]); 
+
+      if (showLiveChatView) {
+        return React.createElement(LiveChatView, { onClose: handleCloseLiveChat });
+      }
+
+      return (
+        React.createElement('div', { className: "flex flex-col h-full bg-slate-100 overflow-hidden relative" }, // Added relative positioning
+          React.createElement(TitleBar, null),
+          React.createElement(MessageList, { messages: messages }),
+          React.createElement(PromptInput, {
+            prompt: prompt,
+            onPromptChange: setPrompt,
+            onSubmit: handleSubmit,
+            isLoading: isLoading,
+            isRecording: isRecording,
+            onToggleRecording: handleToggleRecording
+          }),
+          React.createElement('button', {
+            onClick: handleOpenLiveChat,
+            disabled: isLoading, // Disable if app is loading, but not necessarily if recording main input
+            className: "fixed bottom-6 right-6 md:bottom-8 md:right-8 p-3 bg-gradient-to-br from-purple-600 via-pink-500 to-red-500 text-white rounded-full shadow-xl hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-pink-400 focus:ring-offset-2 transition-all duration-150 ease-in-out z-20 disabled:opacity-60 disabled:cursor-not-allowed",
+            "aria-label": "Open Live Chat",
+            title: "Open Live Chat"
+          },
+            React.createElement(LiveChatIcon, { className: "w-6 h-6 md:w-7 md:h-7" })
+          )
+        )
+      );
+    };
+    // --- END of inlined App.tsx ---
+
+    // --- START of inlined index.tsx (rendering logic) ---
+    const rootElement = document.getElementById('root');
+    if (!rootElement) {
+      throw new Error("Could not find root element to mount to");
+    }
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(
+      React.createElement(React.StrictMode, null, 
+        React.createElement(App, null)
+      )
+    );
+    // --- END of inlined index.tsx ---
+  </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>

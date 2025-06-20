@@ -1,0 +1,8 @@
+{
+  "name": "Ai ",
+  "description": "A simple web application to test prompts with the Gemini API. It uses a pre-configured API key from the environment to send requests to the Gemini model and displays the generated text or any errors.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "prompt": ""
+}
